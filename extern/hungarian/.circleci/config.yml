@@ -1,0 +1,17 @@
+version: 2
+jobs:
+  compile:
+    docker:
+      - image: circleci/python:stretch
+    steps:
+      - run: sudo apt install -y cmake
+      - checkout
+      - run: cmake .
+      - run: make
+      - run: ./test_cases
+
+workflows:
+  version: 2
+  build_and_test:
+    jobs:
+      - compile
