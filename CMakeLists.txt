@@ -40,15 +40,19 @@ set(INCLUDE_DIRS
 
 # add the executable
 add_library(SBPLIB STATIC
-        src/graph.cpp
-        src/utils.cpp
-        src/sbp.cpp
+        src/block_merge.cpp
+        src/common.cpp
         src/entropy.cpp
         src/evaluate.cpp
-        src/common.cpp
+	src/fastlgamma.cpp
+        src/fastlog.cpp
         src/finetune.cpp
-        src/block_merge.cpp
+        src/graph.cpp
+	src/rng.cpp
         src/sample.cpp
+        src/sbp.cpp
+	src/spence.cpp
+        src/utils.cpp
         src/blockmodel/blockmodel.cpp
         src/blockmodel/blockmodel_triplet.cpp
         src/blockmodel/sparse/dict_matrix.cpp
@@ -58,9 +62,7 @@ add_library(SBPLIB STATIC
         src/distributed/dist_common.cpp
         src/distributed/dist_finetune.cpp
         src/distributed/dist_sbp.cpp
-        src/distributed/two_hop_blockmodel.cpp
-        src/fastlog.cpp
-        src/rng.cpp)
+        src/distributed/two_hop_blockmodel.cpp)
 target_include_directories(SBPLIB PUBLIC ${INCLUDE_DIRS})
 
 add_executable(SBP src/main.cpp)
@@ -73,7 +75,7 @@ elseif (DEBUG)
     set(COMPILE_OPTS -g3 -fsanitize=address)
     message("Compiling with -g3 and -fsanitize=address. Valgrind will not work with these executables")
 else()
-    set(COMPILE_OPTS "")
+    set(COMPILE_OPTS -O3)
     message("Compiling without debug options")
 endif()
 

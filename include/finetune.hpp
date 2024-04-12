@@ -1,20 +1,3 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 /**
  * The finetuning phase of the stochastic block blockmodeling algorithm.
  */
@@ -110,9 +93,9 @@ VertexMove_v2 eval_vertex_move_v2(long vertex, long current_block, utils::Propos
 
 /// Evaluates a potential move of `vertex` from `current_block` to `proposal.proposal` using MCMC logic without using
 /// blockmodel deltas.
-VertexMove eval_vertex_move_nodelta(long vertex, long current_block, utils::ProposalAndEdgeCounts proposal,
-                                    const Blockmodel &blockmodel, const Graph &graph, EdgeWeights &out_edges,
-                                    EdgeWeights &in_edges);
+//VertexMove eval_vertex_move_nodelta(long vertex, long current_block, utils::ProposalAndEdgeCounts proposal,
+//                                    const Blockmodel &blockmodel, const Graph &graph, EdgeWeights &out_edges,
+//                                    EdgeWeights &in_edges);
 
 /// Runs the synchronous Metropolis Hastings algorithm on the high-degree vertices of `blockmodel`, and
 /// Asynchronous Gibbs on the rest.
@@ -142,9 +125,9 @@ VertexMove move_vertex(long vertex, long current_block, utils::ProposalAndEdgeCo
                        const Graph &graph, EdgeWeights &out_edges, EdgeWeights &in_edges);
 
 /// Moves `vertex` from `current_block` to `proposal.proposal` using MCMC logic without using blockmodel deltas.
-VertexMove move_vertex_nodelta(long vertex, long current_block, utils::ProposalAndEdgeCounts proposal,
-                               Blockmodel &blockmodel, const Graph &graph, EdgeWeights &out_edges,
-                               EdgeWeights &in_edges);
+//VertexMove move_vertex_nodelta(long vertex, long current_block, utils::ProposalAndEdgeCounts proposal,
+//                               Blockmodel &blockmodel, const Graph &graph, EdgeWeights &out_edges,
+//                               EdgeWeights &in_edges);
 
 /// Computes the overall entropy of the given blockmodel.
 //double mdl(const Blockmodel &blockmodel, long num_vertices, long num_edges);
@@ -157,6 +140,10 @@ VertexMove propose_gibbs_move(const Blockmodel &blockmodel, long vertex, const G
 
 /// Proposes a new Asynchronous Gibbs vertex move.
 VertexMove_v2 propose_gibbs_move_v2(const Blockmodel &blockmodel, long vertex, const Graph &graph);
+
+/// Proposes a new Asynchronous Gibbs vertex move. Contains additional information needed for nonparametric entropy
+/// computations. Should be preferred over _v2.
+VertexMove_v3 propose_gibbs_move_v3(const Blockmodel &blockmodel, long vertex, const Graph &graph);
 
 /// Sorts blocks in order of number of neighbors - used for load balancing.
 std::vector<std::pair<long,long>> sort_blocks_by_neighbors(const Blockmodel &blockmodel);

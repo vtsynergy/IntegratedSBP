@@ -1,20 +1,3 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 /**
  * The block merge phase of the stochastic block blockmodeling module.
  */
@@ -57,7 +40,7 @@ typedef struct proposal_evaluation_t {
 /// Performs the block merges with the highest change in entropy/MDL, recalculating change in entropy before each
 /// merge to account for dependencies between merges. This function modified the blockmodel.
 void carry_out_best_merges_advanced(Blockmodel &blockmodel, const std::vector<double> &delta_entropy_for_each_block,
-                                    const std::vector<long> &best_merge_for_each_block, long num_edges);
+                                    const std::vector<long> &best_merge_for_each_block, const Graph &graph);
 
 /// Returns the potential changes to the blockmodel if `current_block` was merged into `proposed_block`.
 Delta blockmodel_delta(long current_block, long proposed_block, const Blockmodel &blockmodel);
@@ -79,7 +62,7 @@ ProposalEvaluation propose_merge(long current_block, long num_edges, Blockmodel 
                                  std::vector<long> &block_assignment);
 
 /// Proposes a merge for current_block based on the current blockmodel state, using sparse intermediate structures
-ProposalEvaluation propose_merge_sparse(long current_block, long num_edges, const Blockmodel &blockmodel,
+ProposalEvaluation propose_merge_sparse(long current_block, const Blockmodel &blockmodel, const Graph &graph,
                                         std::unordered_map<long, bool> &past_proposals);
 
 } // namespace block_merge

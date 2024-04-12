@@ -1,20 +1,3 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 /***
  * Stores a Graph.
  */
@@ -95,7 +78,7 @@ public:
     /// repeated.
     [[nodiscard]] std::vector<long> neighbors(long vertex) const;
     /// Returns the number of edges in this graph
-    long num_edges() const { return this->_num_edges; }
+    virtual long num_edges() const { return this->_num_edges; }
     /// Counts the number of island vertices in this graph
     long num_islands() const;
     /// Returns the number of vertices in this graph
@@ -110,7 +93,7 @@ public:
     [[nodiscard]] std::vector<std::pair<std::pair<long, long>, long>> sorted_edge_list() const;
     /// Sorts vertices into low and high influence vertices. Does this via vertex degree products of the graph edges
     void degree_product_sort();
-private:
+protected:
     /// For every vertex, stores the community they belong to.
     /// If assignment[v] = -1, then the community of v is not known
     std::vector<long> _assignment;

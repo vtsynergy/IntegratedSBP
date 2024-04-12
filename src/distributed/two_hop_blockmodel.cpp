@@ -1,20 +1,3 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 #include "distributed/two_hop_blockmodel.hpp"
 
 #include <unordered_set>
@@ -28,6 +11,15 @@ void TwoHopBlockmodel::build_two_hop_blockmodel(const NeighborList &neighbors) {
         args.distribute == "none-agg-block-degree-balanced") {
         this->_in_two_hop_radius = utils::constant<bool>(this->num_blocks, true);
         return;
+    }
+    if (args.distribute == "2hop-snowball") {
+        this->_my_blocks = std::vector<bool>(this->num_blocks, false);
+        for (long v = 0; v < (long) neighbors.size(); ++v) {
+            if (this->owns_vertex(v)) {
+                long b = this->block_assignment(v);
+                this->_my_blocks[b] = true;
+            }
+        }
     }
     // I think there will be a missing block in mcmc phase vertex->neighbor->block->neighbor_block
     this->_in_two_hop_radius = utils::constant<bool>(this->num_blocks, false);
@@ -62,6 +54,10 @@ TwoHopBlockmodel TwoHopBlockmodel::copy() {
     blockmodel_copy._block_degrees = std::vector<long>(this->_block_degrees);
     blockmodel_copy._block_degrees_out = std::vector<long>(this->_block_degrees_out);
     blockmodel_copy._block_degrees_in = std::vector<long>(this->_block_degrees_in);
+    blockmodel_copy._block_sizes = std::vector<long>(this->_block_sizes);
+    blockmodel_copy._in_degree_histogram = std::vector<MapVector<long>>(this->_in_degree_histogram);
+    blockmodel_copy._out_degree_histogram = std::vector<MapVector<long>>(this->_out_degree_histogram);
+    blockmodel_copy._num_nonempty_blocks = this->_num_nonempty_blocks;
     blockmodel_copy._in_two_hop_radius = std::vector<bool>(this->_in_two_hop_radius);
     blockmodel_copy.num_blocks_to_merge = 0;
     blockmodel_copy._my_blocks = std::vector<bool>(this->_my_blocks);
@@ -73,6 +69,12 @@ void TwoHopBlockmodel::distribute(const Graph &graph) {
     double start = MPI_Wtime();
     if (args.distribute == "none")
         distribute_none();
+    else if (args.distribute == "2hop-round-robin")
+        distribute_2hop_round_robin(graph.out_neighbors());
+    else if (args.distribute == "2hop-size-balanced")
+        distribute_2hop_size_balanced(graph.out_neighbors());
+    else if (args.distribute == "2hop-snowball")
+        distribute_2hop_snowball(graph.out_neighbors());
     else if (args.distribute == "none-edge-balanced")
         distribute_none_edge_balanced(graph);
     else if (args.distribute == "none-block-degree-balanced")
@@ -81,6 +83,12 @@ void TwoHopBlockmodel::distribute(const Graph &graph) {
         distribute_none_agg_block_degree_balanced(graph);
     else
         distribute_none();
+    if (args.distribute != "none" && args.distribute != "none-edge-balanced" &&
+        args.distribute != "none-block-degree-balanced" &&
+        args.distribute != "none-agg-block-degree-balanced") {
+        std::cout << "WARNING: data distribution is NOT fully supported yet. "
+                  << "We STRONGLY recommend running this software with --distribute none instead" << std::endl;
+    }
     Load_balancing_time += MPI_Wtime() - start;
 }
 
@@ -93,7 +101,7 @@ void TwoHopBlockmodel::distribute_none() {
 
 void TwoHopBlockmodel::distribute_none_edge_balanced(const Graph &graph) {
     if (Rank_indices.empty()) {
-        std::cout << mpi.rank << " | rebuilding rank indices! =============" << std::endl;
+        if (mpi.rank == 0) std::cout << mpi.rank << " | rebuilding rank indices! =============" << std::endl;
         Rank_indices = utils::constant<long>(graph.num_vertices(), 0);
         std::vector<long> vertex_degrees = graph.degrees();
 	    std::vector<long> sorted_indices = utils::argsort<long>(vertex_degrees);
@@ -110,7 +118,7 @@ void TwoHopBlockmodel::distribute_none_edge_balanced(const Graph &graph) {
     this->_my_vertices = Rank_indices;
     for (int rank = 0; rank < mpi.num_processes; ++rank) {
         if (mpi.rank == rank) {
-            std::cout << mpi.rank << " | rank indices = ";
+//            std::cout << mpi.rank << " | rank indices = ";
             for (int j = 0; j < 25; ++j) {
                 std::cout << Rank_indices[j] << ", ";
             }
@@ -187,8 +195,120 @@ void TwoHopBlockmodel::distribute_none_agg_block_degree_balanced(const Graph &gr
     this->_in_two_hop_radius = utils::constant<bool>(this->num_blocks, true);
 }
 
+void TwoHopBlockmodel::distribute_2hop_round_robin(const NeighborList &neighbors) {
+    // Step 1: decide which blocks to own
+    this->_my_blocks = utils::constant<bool>(this->num_blocks, false);
+    for (long i = mpi.rank; i < this->num_blocks; i += mpi.num_processes)
+        this->_my_blocks[i] = true;
+    // Step 2: find out which blocks are in the 2-hop radius of my blocks
+    build_two_hop_blockmodel(neighbors);
+}
+
+void TwoHopBlockmodel::distribute_2hop_size_balanced(const NeighborList &neighbors) {
+    // Step 1: decide which blocks to own
+    this->_my_blocks = utils::constant<bool>(this->num_blocks, false);
+    std::vector<std::pair<long,long>> block_sizes = this->sorted_block_sizes();
+    for (long i = mpi.rank; i < this->num_blocks; i += 2 * mpi.num_processes) {
+        long block = block_sizes[i].first;
+        this->_my_blocks[block] = true;
+    }
+    for (long i = 2 * mpi.num_processes - 1 - mpi.rank; i < this->num_blocks; i += 2 * mpi.num_processes) {
+        long block = block_sizes[i].first;
+        this->_my_blocks[block] = true;
+    }
+    // Step 2: find out which blocks are in the 2-hop radius of my blocks
+    build_two_hop_blockmodel(neighbors);
+}
+
+void TwoHopBlockmodel::distribute_2hop_snowball(const NeighborList &neighbors) {
+    // Step 1: decide which blocks to own
+    this->_my_blocks = utils::constant<bool>(this->num_blocks, false);
+    // std::cout << "my vertices size: " << this->_my_vertices.size() << " neighbors size: " << neighbors.size() << std::endl;
+    if (this->_my_vertices.size() == neighbors.size()) {  // if already done sampling, no need to do it again
+        std::cout << "already done sampling, now just re-assigning blocks based on sampled vertices" << std::endl;
+        for (size_t vertex = 0; vertex < neighbors.size(); ++vertex) {
+            if (this->_my_vertices[vertex] == 0) continue;
+            long block = this->_block_assignment[vertex];
+            this->_my_blocks[block] = true;
+        }
+    } else {
+        long target = ceil((double) neighbors.size() / (double) mpi.num_processes);
+        this->_my_vertices = utils::constant<long>(neighbors.size(), 0);  // cannot send vector<bool>.data() over MPI
+        std::unordered_set<long> frontier;
+        // Snowball Sampling
+        srand(mpi.num_processes + mpi.rank);
+        long start = rand() % neighbors.size();  // replace this with a proper long distribution
+        std::cout << "rank: " << mpi.rank << " with start = " << start << std::endl;
+        this->_my_vertices[start] = 1;
+        for (long neighbor : neighbors[start]) {
+            frontier.insert(neighbor);
+        }
+        long block = this->_block_assignment[start];
+        this->_my_blocks[block] = true;
+        long num_vertices = 1;
+        while (num_vertices < target) {
+            std::unordered_set<long> new_frontier;
+            for (long vertex : frontier) {
+                if (this->_my_vertices[vertex] == 1) continue;
+                this->_my_vertices[vertex] = 1;
+                for (long neighbor : neighbors[vertex]) {
+                    new_frontier.insert(neighbor);
+                }
+                block = this->_block_assignment[vertex];
+                this->_my_blocks[block] = true;
+                num_vertices++;
+                if (num_vertices == target) break;
+            }
+            if (num_vertices < target && frontier.size() == 0) {  // restart with a new vertex that isn't already selected
+                std::unordered_set<long> candidates;
+                for (long i = 0; i < (long) neighbors.size(); ++i) {
+                    if (this->_my_vertices[i] == 0) candidates.insert(i);
+                }
+                long index = rand() % candidates.size();
+                auto it = candidates.begin();
+                std::advance(it, index);
+                start = *it;
+                this->_my_vertices[start] = 1;
+                for (long neighbor : neighbors[start]) {
+                    new_frontier.insert(neighbor);
+                }
+                block = this->_block_assignment[start];
+                this->_my_blocks[block] = true;
+                num_vertices++;
+            }
+            frontier = std::unordered_set<long>(new_frontier);
+        }
+        // Some vertices may be unassigned across all ranks. Find out what they are, and assign 1/num_processes of them
+        // to this process.
+        std::vector<long> global_selected(neighbors.size(), 0);
+        MPI_Allreduce(this->_my_vertices.data(), global_selected.data(), neighbors.size(), MPI_LONG, MPI_MAX, mpi.comm);
+        // if (mpi.rank == 0) {
+            // std::cout << "my selected: " << std::boolalpha;
+            // utils::print<long>(this->_my_vertices);
+            // std::cout << "globally selected: ";
+            // utils::print<long>(global_selected);
+        // }
+        std::vector<long> vertices_left;
+        for (long vertex = 0; vertex < (long) global_selected.size(); ++vertex) {
+            if (global_selected[vertex] == 0) {
+                vertices_left.push_back(vertex);
+            }
+        }
+        // assign remaining vertices in round-robin fashion
+        for (size_t i = mpi.rank; i < vertices_left.size(); i += mpi.num_processes) {
+            long vertex = vertices_left[i];
+            this->_my_vertices[vertex] = 1;
+            block = this->_block_assignment[vertex];
+            this->_my_blocks[block] = true;
+        }
+    }
+    // Step 2: find out which blocks are in the 2-hop radius of my blocks
+    this->build_two_hop_blockmodel(neighbors);
+}
+
 void TwoHopBlockmodel::initialize_edge_counts(const Graph &graph) {
     /// TODO: this recreates the matrix (possibly unnecessary)
+    this->_num_nonempty_blocks = 0;
     std::shared_ptr<ISparseMatrix> blockmatrix;
     long num_buckets = graph.num_edges() / graph.num_vertices();
     if (args.transpose) {
@@ -200,9 +320,12 @@ void TwoHopBlockmodel::initialize_edge_counts(const Graph &graph) {
     std::vector<long> block_degrees_in = utils::constant<long>(this->num_blocks, 0);
     std::vector<long> block_degrees_out = utils::constant<long>(this->num_blocks, 0);
     std::vector<long> block_degrees = utils::constant<long>(this->num_blocks, 0);
+    std::vector<long> block_sizes = utils::constant<long>(this->num_blocks, 0);
+    std::vector<MapVector<long>> out_degree_histogram(this->num_blocks);
+    std::vector<MapVector<long>> in_degree_histogram(this->num_blocks);
     // Initialize the blockmodel in parallel
     #pragma omp parallel default(none) \
-    shared(blockmatrix, block_degrees_in, block_degrees_out, block_degrees, graph, args)
+    shared(blockmatrix, block_degrees_in, block_degrees_out, block_degrees, block_sizes, out_degree_histogram, in_degree_histogram, graph, args)
     {
         long tid = omp_get_thread_num();
         long num_threads = omp_get_num_threads();
@@ -213,6 +336,13 @@ void TwoHopBlockmodel::initialize_edge_counts(const Graph &graph) {
             long block = this->_block_assignment[vertex];
             if (block < start || block >= end || !this->_in_two_hop_radius[block])  // only modify blocks this thread is responsible for
                 continue;
+            if (block_sizes[block] == 0) {
+                #pragma omp atomic
+                this->_num_nonempty_blocks++;
+            }
+            block_sizes[block]++;
+            out_degree_histogram[block][graph.out_neighbors(long(vertex)).size()]++;
+            in_degree_histogram[block][graph.in_neighbors(long(vertex)).size()]++;
             for (long neighbor : graph.out_neighbors(long(vertex))) {
                 long neighbor_block = this->_block_assignment[neighbor];
                 if (!this->_in_two_hop_radius[neighbor_block]) {
@@ -245,11 +375,15 @@ void TwoHopBlockmodel::initialize_edge_counts(const Graph &graph) {
     this->_block_degrees_out = std::move(block_degrees_out);
     this->_block_degrees_in = std::move(block_degrees_in);
     this->_block_degrees = std::move(block_degrees);
+    this->_block_sizes = std::move(block_sizes);
+    this->_out_degree_histogram = std::move(out_degree_histogram);
+    this->_in_degree_histogram = std::move(in_degree_histogram);
 }
 
 double TwoHopBlockmodel::log_posterior_probability() const {
     std::vector<long> my_blocks;
-    if (args.distribute == "none-edge-balanced" || args.distribute == "none-agg-block-degree-balanced") {
+    if (args.distribute == "2hop-snowball" || args.distribute == "none-edge-balanced" ||
+        args.distribute == "none-agg-block-degree-balanced") {
         my_blocks = utils::constant<long>(this->num_blocks, -1);
         for (long block = 0; block < this->num_blocks; ++block) {
             if (this->_my_blocks[block])
@@ -265,7 +399,11 @@ double TwoHopBlockmodel::log_posterior_probability() const {
     std::vector<double> values;
     for (ulong i = 0; i < nonzero_indices.rows.size(); ++i) {
         long row = nonzero_indices.rows[i];
-        if (this->_my_blocks[row] == false) continue;
+        if (args.distribute == "2hop-snowball") {
+            if (my_blocks[row] != mpi.rank) continue;
+        } else {
+            if (this->_my_blocks[row] == false) continue;
+        }
         // if (row % mpi.num_processes != mpi.rank) continue;
         values.push_back(all_values[i]);
         degrees_in.push_back(this->_block_degrees_in[nonzero_indices.cols[i]]);
@@ -291,7 +429,8 @@ bool TwoHopBlockmodel::owns_block(long block) const {
 }
 
 bool TwoHopBlockmodel::owns_vertex(long vertex) const {
-    if (args.distribute == "none-edge-balanced" || args.distribute == "none-agg-block-degree-balanced") {
+    if (args.distribute == "2hop-snowball" || args.distribute == "none-edge-balanced" ||
+        args.distribute == "none-agg-block-degree-balanced") {
         return this->_my_vertices[vertex];
     }
     long block = this->_block_assignment[vertex];

@@ -1,21 +1,6 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 #include "entropy.hpp"
+#include "fastlgamma.hpp"
+#include "spence.hpp"
 
 #include "cmath"
 
@@ -511,7 +496,7 @@ double hastings_correction(const Blockmodel &blockmodel, EdgeWeights &out_blocks
 
 double hastings_correction(long vertex, const Graph &graph, const Blockmodel &blockmodel, const Delta &delta,
                            long current_block, const utils::ProposalAndEdgeCounts &proposal) {
-    if (proposal.num_neighbor_edges == 0 || args.greedy) {  // No correction needed with greedy proposals
+    if (proposal.num_neighbor_edges == 0 || args.greedy || args.nonparametric) {  // No correction needed with greedy proposals
         return 1.0;
     }
     // Compute block weights
@@ -575,23 +560,32 @@ double hastings_correction(long vertex, const Graph &graph, const Blockmodel &bl
     return p_backward / p_forward;
 }
 
-double normalize_mdl_v1(double mdl, long num_edges) {
-    return mdl / null_mdl_v1(num_edges);
+double normalize_mdl_v1(double mdl, const Graph &graph) {
+    return mdl / null_mdl_v1(graph);
 }
 
 double normalize_mdl_v2(double mdl, long num_vertices, long num_edges) {
     return mdl / null_mdl_v2(num_vertices, num_edges);
 }
 
-double null_mdl_v1(long num_edges) {
-    double log_posterior_p = num_edges * log(1.0 / num_edges);
-    double x = 1.0 / num_edges;
+double null_mdl_v1(const Graph &graph) {
+    if (args.nonparametric) {
+//        std::cout << "why is this running nonparametric?" << std::endl;
+        std::vector<long> assignment = utils::constant<long>(graph.num_vertices(), 0);
+        Blockmodel null_model(1, graph, 0.5, assignment);
+        return mdl(null_model, graph);
+    }
+//    std::cout << "running correct version at least..." << std::endl;
+    std::cout << graph.num_edges() << std::endl;
+    double log_posterior_p = graph.num_edges() * log(1.0 / graph.num_edges());
+    double x = 1.0 / graph.num_edges();
     double h = ((1 + x) * log(1 + x)) - (x * log(x));
-//    std::cout << "log posterior = " << log_posterior_p << " blockmodel = " << (num_edges * h) << std::endl;
-    return (num_edges * h) - log_posterior_p;
+    std::cout << "log posterior = " << log_posterior_p << " blockmodel = " << (graph.num_edges() * h) << std::endl;
+    return (graph.num_edges() * h) - log_posterior_p;
 }
 
 double null_mdl_v2(long num_vertices, long num_edges) {
+    // TODO: not sure how this works in nonparametric version
     double log_posterior_p = num_edges * log(1.0 / num_edges);
     // done calculating log_posterior_probability
     double x = pow(num_vertices, 2) / num_edges;
@@ -600,11 +594,13 @@ double null_mdl_v2(long num_vertices, long num_edges) {
     return (num_edges * h) + (num_vertices * log(num_vertices)) - log_posterior_p;
 }
 
-double mdl(const Blockmodel &blockmodel, long num_vertices, long num_edges) {
+double mdl(const Blockmodel &blockmodel, const Graph &graph) {
+    if (args.nonparametric)
+        return nonparametric::mdl(blockmodel, graph);
     double log_posterior_p = blockmodel.log_posterior_probability();
-    double x = pow(blockmodel.getNum_blocks(), 2) / num_edges;
+    double x = pow(blockmodel.getNum_blocks(), 2) / graph.num_edges();
     double h = ((1 + x) * log(1 + x)) - (x * log(x));
-    return (num_edges * h) + (num_vertices * log(blockmodel.getNum_blocks())) - log_posterior_p;
+    return (graph.num_edges() * h) + (graph.num_vertices() * log(blockmodel.getNum_blocks())) - log_posterior_p;
 }
 
 namespace dist {
@@ -617,5 +613,615 @@ double mdl(const TwoHopBlockmodel &blockmodel, long num_vertices, long num_edges
 }
 
 }  // namespace dist
+
+namespace nonparametric {
+
+double get_deg_entropy(const Graph &graph, long vertex) {  // , const simple_degs_t&) {
+    long k_in = (long) graph.in_neighbors(vertex).size();
+    long k_out = (long) graph.out_neighbors(vertex).size();
+    return -fastlgamma(k_in + 1) - fastlgamma(k_out + 1);
+}
+
+double sparse_entropy(const Blockmodel &blockmodel, const Graph &graph) {
+    double S = 0;
+
+    for (long source = 0; source < blockmodel.getNum_blocks(); ++source) {
+        const MapVector<long> &row = blockmodel.blockmatrix()->getrow_sparseref(source);
+        for (const std::pair<long, long> &entry : row) {
+            long destination = entry.first;
+            long weight = entry.second;
+            S += eterm_exact(source, destination, weight);
+            assert(!std::isinf(S));
+            assert(!std::isnan(S));        }
+    }
+
+    for (long block = 0; block < blockmodel.getNum_blocks(); ++block) {
+        S += vterm_exact(blockmodel.degrees_out(block), blockmodel.degrees_in(block), blockmodel.block_size(block));
+        assert(!std::isinf(S));
+        assert(!std::isnan(S));    }
+
+//    std::cout << "S before deg_ent?ropy: " << S << std::endl;
+    if (!args.degreecorrected) return S;
+//    double S2 = 0.0;
+    // In distributed case, we would only compute these for vertices we're responsible for. Since it's a simple addition, we can do an allreduce.
+    for (long vertex = 0; vertex < graph.num_vertices(); ++vertex) {
+//        S += get_deg_entropy(graph, vertex);
+        double temp = get_deg_entropy(graph, vertex);
+        S += temp;
+        assert(!std::isinf(S));
+        assert(!std::isnan(S));
+//        S2 += temp;
+    }
+
+//    std::cout << "deg_entropy: " << S2 << std::endl;
+
+    return S;
+}
+
+double get_partition_dl(long N, const Blockmodel &blockmodel) { // _N = number of vertices, _actual_B = nonzero blocks, _total = vector of block sizes
+    double S = 0;
+    S += fastlbinom(N - 1, blockmodel.num_nonempty_blocks() - 1);
+    S += fastlgamma(N + 1);
+    for (const long &block_size : blockmodel.block_sizes())
+        S -= fastlgamma(block_size + 1);
+    S += fastlog(N);
+//    std::cout << "Partition dl: " << S << std::endl;
+    assert(!std::isinf(S));
+    assert(!std::isnan(S));
+    return S;
+}
+
+/// No idea what this function does. See int_part.cc in https://git.skewed.de/count0/graph-tool
+double get_v(double u, double epsilon) {
+    double v = u;
+    double delta = 1;
+    while (delta > epsilon) {
+        double n_v = u * sqrt(spence(exp(-v)));
+        delta = abs(n_v - v);
+        v = n_v;
+    }
+    return v;
+}
+
+double log_q_approx_small(size_t n, size_t k) {
+    return fastlbinom(n - 1, k - 1) - fastlgamma(k + 1);
+}
+
+/// Computes the number of restricted of integer n into at most m parts. This is part of teh prior for the
+/// degree-corrected SBM.
+/// TO-DO: the current function contains only the approximation of log_q. If it becomes a bottleneck, you'll want to
+/// compute a cache of log_q(n, m) for ~20k n and maybe a few hundred m? I feel like for larger graphs, the cache
+/// will be a waste of time.
+/// See int_part.cc in https://git.skewed.de/count0/graph-tool
+double log_q(size_t n, size_t k) {
+    if (n <= 0 || k < 1) return 0;
+    if (k > n) k = n;
+    if (k < pow(n, 1/4.))
+        return log_q_approx_small(n, k);
+    double u = k / sqrt(n);
+    double v = get_v(u);
+    double lf = log(v) - log1p(- exp(-v) * (1 + u * u/2)) / 2 - log(2) * 3 / 2.
+                - log(u) - log(M_PI);
+    double g = 2 * v / u - u * log1p(-exp(-v));
+    return lf - log(n) + sqrt(n) * g;
+}
+
+double get_deg_dl_dist(const Blockmodel &blockmodel) { // Rs&& rs, Ks&& ks) {  // RS: range from 0 to B, KS is an empty array of pairs?
+    if (!args.degreecorrected) return 0.0;
+
+    double S = 0;
+
+    for (int block = 0; block < blockmodel.getNum_blocks(); ++block) {
+        S += log_q(blockmodel.degrees_out(block), blockmodel.block_size(block));
+        S += log_q(blockmodel.degrees_in(block), blockmodel.block_size(block));
+        size_t total = 0;
+        if (!args.undirected) {
+            for (const std::pair<long, long> &entry : blockmodel.in_degree_histogram(block)) {
+                S -= fastlgamma(entry.second + 1);
+                assert(!std::isinf(S));
+                assert(!std::isnan(S));
+            }
+        }
+        for (const std::pair<long, long> &entry : blockmodel.out_degree_histogram(block)) {
+            S -= fastlgamma(entry.second + 1);
+            assert(!std::isinf(S));
+            assert(!std::isnan(S));
+            total += entry.second;
+        }
+
+        if (args.undirected) {
+            S += fastlgamma(total + 1);
+        } else {
+            S += 2 * fastlgamma(total + 1);
+        }
+        assert(!std::isinf(S));
+        assert(!std::isnan(S));
+    }
+//    std::cout << "degree_dl: " << S << std::endl;
+    return S;
+}
+
+double get_edges_dl(size_t B, size_t E) {
+    size_t NB = !args.undirected ? B * B : (B * (B + 1)) / 2;
+    double E_dl = fastlbinom(NB + E - 1, E);
+//    std::cout << "edges_dl: " << E_dl << std::endl;
+    return E_dl;
+}
+
+double mdl(const Blockmodel &blockmodel, const Graph &graph) {
+    double S = 0, S_dl = 0;
+
+    S = sparse_entropy(blockmodel, graph);
+    assert(!std::isinf(S));
+    assert(!std::isnan(S));
+//    std::cout << "sparse E: " << S << std::endl;
+
+    S_dl += get_partition_dl(graph.num_vertices(), blockmodel);
+    assert(!std::isinf(S_dl));
+    assert(!std::isnan(S_dl));
+//    std::cout << "partition_dl: " << S_dl << std::endl;
+
+    S_dl += get_deg_dl_dist(blockmodel);  // (ea.degree_dl_kind);
+    assert(!std::isinf(S_dl));
+    assert(!std::isnan(S_dl));
+//    std::cout << "after deg_dl: " << S_dl << std::endl;
+
+//    std::cout << "NB: " << blockmodel.num_nonempty_blocks() << " E: " << graph.num_edges() << std::endl;
+//    S_dl += get_edges_dl(blockmodel.num_nonempty_blocks(), graph.num_edges());
+    double E_dl = get_edges_dl(blockmodel.num_nonempty_blocks(), graph.num_edges());
+//    std::cout << "edges_dl: " << E_dl << std::endl;
+    S_dl += E_dl;
+    assert(!std::isinf(S_dl));
+    assert(!std::isnan(S_dl));
+//    std::cout << "after edge_dl: " << S_dl << std::endl;
+//    utils::print(blockmodel.block_sizes());
+    return S + S_dl * BETA_DL;
+}
+
+// obtain the entropy difference given a set of entries in the e_rs matrix
+//template <bool exact, class MEntries, class Eprop, class EMat, class BGraph>
+//[[gnu::always_inline]] [[gnu::flatten]] [[gnu::hot]] inline
+double entries_dS(const Blockmodel &blockmodel, const Delta &delta) {  // MEntries& m_entries, Eprop& mrs, EMat& emat, BGraph& bg) {
+    const std::shared_ptr<ISparseMatrix> matrix = blockmodel.blockmatrix();
+    double dS = 0;
+    for (const std::tuple<long, long, long> &entry : delta.entries()) {
+        long row = std::get<0>(entry);
+        long col = std::get<1>(entry);
+        auto change = (long) std::get<2>(entry);
+        // delta += + E(old) - E(new)
+        auto value = (long) matrix->get(row, col);
+        dS += eterm_exact(row, col, value + change) - eterm_exact(row, col, value);
+        assert(!std::isinf(dS));
+        assert(!std::isnan(dS));
+    }
+//    entries_op(m_entries, emat,
+//               [&](auto r, auto s, auto& me, auto d)
+//               {
+//                   size_t ers = 0;
+//                   if (me != emat.get_null_edge())
+//                       ers = mrs[me];
+//                   assert(int(ers) + d >= 0);
+//                   if constexpr (exact)
+//                       dS += eterm_exact(r, s, ers + d, bg) - eterm_exact(r, s, ers, bg);
+//                   else
+//                       dS += eterm(r, s, ers + d, bg) - eterm(r, s, ers, bg);
+//               });
+    return dS;
+}
+
+// compute the entropy difference of a virtual move of vertex from block r
+// to nr
+//template <bool exact, class MEntries>
+double virtual_move_sparse(const Blockmodel &blockmodel, const Delta &delta, long weight,
+                           const utils::ProposalAndEdgeCounts &proposal) {  // size_t v, size_t r, size_t nr, MEntries& m_entries) {
+    if (delta.current_block() == delta.proposed_block()) return 0.;
+
+    double dS = entries_dS(blockmodel, delta);  // <exact>(m_entries, _mrs, _emat, _bg);
+
+    long kin = proposal.num_in_neighbor_edges;
+    long kout = proposal.num_out_neighbor_edges;
+//    auto [kin, kout] = get_deg(v, _eweight, _degs, _g);
+
+//    int dwr = _vweight[v];
+//    int dwnr = dwr;
+//    int dwr = 1, dwnr = 1;
+
+//    if (r == null_group && dwnr == 0)
+//        dwnr = 1;
+
+    auto vt = [&](auto out_degree, auto in_degree, auto w) { // , auto nr) {
+        assert(out_degree >= 0 && in_degree >=0);
+//        if constexpr (exact)
+        return vterm_exact(out_degree, in_degree, w);  // , nr, _deg_corr, _bg);
+//        else
+//            return vterm(mrp, mrm, nr, _deg_corr, _bg);
+    };
+
+//    if (r != null_group)
+//    {
+//    auto mrp_r = _mrp[r];
+//    auto mrm_r = _mrm[r];
+//    auto wr_r = _wr[r];
+    dS += vt(blockmodel.degrees_out(delta.current_block()) - kout, blockmodel.degrees_in(delta.current_block()) - kin, blockmodel.block_size(delta.current_block()) - weight);  // , wr_r - dwr);
+    dS -= vt(blockmodel.degrees_out(delta.current_block()), blockmodel.degrees_in(delta.current_block()), blockmodel.block_size(delta.current_block()));  //        , mrm_r      , wr_r      );
+    assert(!std::isinf(dS));
+    assert(!std::isnan(dS));
+//    }
+
+//    if (nr != null_group)
+//    {
+//        auto mrp_nr = _mrp[nr];
+//        auto mrm_nr = _mrm[nr];
+//        auto wr_nr = _wr[nr];
+    dS += vt(blockmodel.degrees_out(delta.proposed_block()) + kout, blockmodel.degrees_in(delta.proposed_block()) + kin, blockmodel.block_size(delta.proposed_block()) + weight);  // , wr_nr + dwnr);
+    dS -= vt(blockmodel.degrees_out(delta.proposed_block()), blockmodel.degrees_in(delta.proposed_block()), blockmodel.block_size(delta.proposed_block()));  //        , mrm_nr      , wr_nr       );
+    assert(!std::isinf(dS));
+    assert(!std::isnan(dS));
+//    }
+
+//    std::cout << "delta sparse entropy: " << dS << std::endl;
+    return dS;
+}
+
+double get_delta_partition_dl(long num_vertices, const Blockmodel &blockmodel, const Delta &delta, long weight) {  // size_t v, size_t r, size_t nr, const entropy_args_t& ea) {
+    if (delta.current_block() == delta.proposed_block()) return 0.;
+
+    double dS = 0;
+
+//    auto& f = _bfield[v];
+//    if (!f.empty())
+//    {
+//        if (nr != null_group)
+//            dS -= (nr < f.size()) ? f[nr] : f.back();
+//        if (r != null_group)
+//            dS += (r < f.size()) ? f[r] : f.back();
+//    }
+
+//    if (r == nr)
+//        return 0;
+
+//    if (r != null_group)
+//        r = get_r(r);
+
+//    if (nr != null_group)
+//        nr = get_r(nr);
+
+//    int n = 1;  // vweight[v]; for block_merge, change this to size of the blockmodel
+//    if (n == 0) {
+//        if (r == null_group)
+//            n = 1;
+//        else
+//            return 0;
+//    }
+
+    double S_b = 0;
+    double S_a = 0;
+
+//    if (r != null_group)
+//    {
+//    std::cout << "size of current: " << blockmodel.block_size(delta.current_block())
+    S_b += -fastlgamma(blockmodel.block_size(delta.current_block()) + 1);  // _total[r] + 1);
+    S_a += -fastlgamma(blockmodel.block_size(delta.current_block()) - weight + 1);  // _total[r] - n + 1);
+
+//    std::cout << "point A: S_b = " << S_b << " S_a = " << S_a << std::endl;
+//    }
+
+//    if (nr != null_group)
+//    {
+    S_b += -fastlgamma(blockmodel.block_size(delta.proposed_block()) + 1);  // _total[nr] + 1);
+    S_a += -fastlgamma(blockmodel.block_size(delta.proposed_block()) + weight + 1);  // _total[nr] + n + 1);
+
+//    std::cout << "point B: S_b = " << S_b << " S_a = " << S_a << std::endl;
+
+//    }
+
+//    int dN = 0;
+//    if (r == null_group)
+//        dN += n;
+//    if (nr == null_group)
+//        dN -= n;
+//
+//    S_b += lgamma_fast(_N + 1);
+//    S_a += lgamma_fast(_N + dN + 1);
+
+    int dB = 0;
+    if (blockmodel.block_size(delta.current_block()) == weight)
+        dB--;
+    if (blockmodel.block_size(delta.proposed_block()) == 0)
+        dB++;
+//    if (r != null_group && _total[r] == n)
+//        dB--;
+//    if (nr != null_group && _total[nr] == 0)
+//        dB++;
+
+    if (dB != 0) {
+        S_b += fastlbinom(num_vertices - 1, blockmodel.num_nonempty_blocks() - 1);
+        S_a += fastlbinom(num_vertices - 1, blockmodel.num_nonempty_blocks() + dB - 1);
+    }
+
+//    std::cout << "point C: S_b = " << S_b << " S_a = " << S_a << std::endl;
+
+//    if ((dN != 0 || dB != 0)) {
+//        S_b += lbinom_fast(_N - 1, _actual_B - 1);
+//        S_a += lbinom_fast(_N - 1 + dN, _actual_B + dB - 1);
+//    }
+
+//    if (dN != 0)
+//    {
+//        S_b += safelog_fast(_N);
+//        S_a += safelog_fast(_N + dN);
+//    }
+
+    dS += S_a - S_b;
+    assert(!std::isinf(dS));
+    assert(!std::isnan(dS));
+
+//    if (ea.partition_dl)
+//    {
+//        auto& ps = get_partition_stats(v);
+//        dS += ps.get_delta_partition_dl(v, r, nr, _vweight);
+//    }
+
+//    if (_coupled_state != nullptr)
+//    {
+//        bool r_vacate = (r != null_group && _wr[r] == _vweight[v]);
+//        bool nr_occupy = (nr != null_group && _wr[nr] == 0);
+//
+//        auto& bh = _coupled_state->get_b();
+//        if (r_vacate && nr_occupy)
+//        {
+//            dS += _coupled_state->get_delta_partition_dl(r, bh[r], bh[nr],
+//                                                         _coupled_entropy_args);
+//        }
+//        else
+//        {
+//            if (r_vacate)
+//                dS += _coupled_state->get_delta_partition_dl(r, bh[r], null_group,
+//                                                             _coupled_entropy_args);
+//            if (nr_occupy)
+//                dS += _coupled_state->get_delta_partition_dl(nr, null_group, bh[nr],
+//                                                             _coupled_entropy_args);
+//        }
+//    }
+//    std::cout << "delta partition dl: " << dS << std::endl;
+    return dS;
+}
+
+//template <class DegOP>
+//double get_delta_deg_dl_dist_change(size_t r, DegOP&& dop, int diff) {
+double get_delta_deg_dl_dist_change(const Blockmodel &blockmodel, long block, long vkin, long vkout, long vweight,
+                                    int diff) {
+//    if (!args.degreecorrected) return 0.0;
+    // vweight may be unnecessary. At least for the DOp portion
+    auto total_r = blockmodel.block_size(block);  // _total[r];
+    auto ep_r = blockmodel.degrees_out(block);  // _ep[r];
+    auto em_r = blockmodel.degrees_in(block);  // _em[r];
+
+    auto get_Se = [&](int delta, int kin, int kout) {
+        double S = 0;
+        assert(total_r + delta >= 0);
+        assert(em_r + kin >= 0);
+        assert(ep_r + kout >= 0);
+        S += log_q(em_r + kin, total_r + delta);
+        S += log_q(ep_r + kout, total_r + delta);
+        return S;
+    };
+
+    auto get_Sr = [&](int delta) {
+        assert(total_r + delta + 1 >= 0);
+        if (args.undirected)
+            return fastlgamma(total_r + delta + 1);
+        else
+            return 2 * fastlgamma(total_r + delta + 1);
+    };
+
+    auto get_Sk = [&](std::pair<long, long>& deg, int delta) {
+        double S = 0;
+        int nd = 0;
+        if (!args.undirected) {
+//            if (_hist_in[block] != nullptr) {
+//                auto& h = *_hist_in[block];
+//            if (blockmodel.in_degree_histogram(block) != nullptr) {
+            const MapVector<long> &histogram = blockmodel.in_degree_histogram(block);
+            auto iter = histogram.find(std::get<0>(deg));
+            if (iter != histogram.end())
+                nd = iter->second;
+//            }
+            S -= fastlgamma(nd + delta + 1);
+        }
+
+        nd = 0;
+//        if (_hist_out[block] != nullptr) {
+//        auto& h = *_hist_out[block];
+        const MapVector<long> &histogram = blockmodel.out_degree_histogram(block);
+        auto iter = histogram.find(std::get<1>(deg));
+        if (iter != histogram.end())
+            nd = iter->second;
+//        }
+
+        return S - fastlgamma(nd + delta + 1);
+    };
+
+    double S_b = 0, S_a = 0;
+    int tkin = 0, tkout = 0, n = 0;
+//    dop([&](size_t kin, size_t kout, int nk)
+//        {
+    tkin += vkin;  //  * vweight;
+    tkout += vkout;  //  * vweight;
+    n += vweight;
+
+    std::pair<long, long> deg = std::make_pair(vkin, vkout);
+    S_b += get_Sk(deg,         0);
+    S_a += get_Sk(deg, diff * vweight);
+//        });
+
+    S_b += get_Se(       0,           0,            0);
+    S_a += get_Se(diff * n, diff * tkin, diff * tkout);
+
+    S_b += get_Sr(       0);
+    S_a += get_Sr(diff * n);
+
+    return S_a - S_b;
+}
+
+
+//template <class Graph, class VProp, class EProp, class Degs>
+double get_delta_deg_dl(long vertex, const Blockmodel &blockmodel, const Delta &delta, const Graph &graph) {  // size_t r, size_t nr, VProp& vweight,
+//                        EProp& eweight, Degs& degs, Graph& g, int kind) {
+//    if (r == nr || vweight[v] == 0)
+//        return 0;
+    if (!args.degreecorrected) return 0.00;
+    if (delta.current_block() == delta.proposed_block()) return 0.;  // for block_merge, it's this || size(block) == 0
+//    if (r != null_group)
+//        r = get_r(r);
+//    if (nr != null_group)
+//        nr = get_r(nr);
+
+//    auto dop = [&](auto&& f) {
+//        long kin = graph.in_neighbors(vertex).size();
+//        long kout = graph.out_neighbors(vertex).size();
+////        auto [kin, kout] = get_deg(v, eweight, degs, g);
+//        f(kin, kout, 1);  // for block merge, it's size(block) instead of 1 | vweight[v]);
+//    };
+
+    long vkin = graph.in_neighbors(vertex).size();
+    long vkout = graph.out_neighbors(vertex).size();
+    double dS = 0;
+//    if (r != null_group)
+//    dS += get_delta_deg_dl_dist_change(blockmodel, delta.current_block(),  dop, -1);
+    dS += get_delta_deg_dl_dist_change(blockmodel, delta.current_block(),  vkin, vkout, 1, -1);
+//    if (nr != null_group)
+//    dS += get_delta_deg_dl_dist_change(blockmodel, delta.proposed_block(), dop, +1);
+    dS += get_delta_deg_dl_dist_change(blockmodel, delta.proposed_block(), vkin, vkout, 1, +1);
+    assert(!std::isinf(dS));
+    assert(!std::isnan(dS));
+
+//    }
+//    std::cout << "delta degree dl: " << dS << std::endl;
+    return dS;
+}
+
+//template <class VProp, class Graph>
+double get_delta_edges_dl(const Blockmodel &blockmodel, const Delta &delta, long weight, long num_edges) {
+    if (delta.current_block() == delta.proposed_block())
+        return 0;
+
+//    if (r != null_group)
+//        r = get_r(r);
+//    if (nr != null_group)
+//        nr = get_r(nr);
+
+    double S_b = 0, S_a = 0;
+
+//    int n = weight;  // vweight[v];
+
+//    if (n == 0)
+//    {
+//        if (r == null_group)
+//            n = 1;
+//        else
+//            return 0;
+//    }
+
+    int dB = 0;
+//    if (r != null_group && _total[r] == n)
+    if (blockmodel.block_size(delta.current_block()) == weight)
+        dB--;
+//    if (nr != null_group && _total[nr] == 0)
+    if (blockmodel.block_size(delta.proposed_block()) == 0)
+        dB++;
+
+    if (dB != 0) {
+        S_b += get_edges_dl(blockmodel.num_nonempty_blocks(), num_edges);
+        S_a += get_edges_dl(blockmodel.num_nonempty_blocks() + dB, num_edges);
+    }
+
+    double dS = S_a - S_b;
+    assert(!std::isinf(dS));
+    assert(!std::isnan(dS));
+//    std::cout << "delta edges dl: " << dS << std::endl;
+    return dS;
+}
+
+double delta_mdl(const Blockmodel &blockmodel, const Graph &graph, long vertex, const Delta &delta,
+                 const utils::ProposalAndEdgeCounts &proposal) {
+//    std::cout << blockmodel.block_assignment(vertex) << " != " << delta.current_block() << std::endl;
+    assert(blockmodel.block_assignment(vertex) == delta.current_block());
+
+//    get_move_entries(v, r, nr, m_entries, [](auto) constexpr { return false; });
+
+    if (delta.current_block() == delta.proposed_block()) return 0;
+//    if (r == nr || _vweight[v] == 0)
+//        return 0;
+
+    double dS = 0;
+    dS = virtual_move_sparse(blockmodel, delta, 1, proposal);  // <true>(v, r, nr, m_entries);
+
+    double dS_dl = 0;
+
+    dS_dl += get_delta_partition_dl(graph.num_vertices(), blockmodel, delta, 1);  // v, r, nr, ea);
+    assert(!std::isinf(dS_dl));
+    assert(!std::isnan(dS_dl));
+
+//    if (ea.degree_dl || ea.edges_dl) {
+//    auto& ps = get_partition_stats(v);
+//    if (_deg_corr && ea.degree_dl)
+    dS_dl += get_delta_deg_dl(vertex, blockmodel, delta, graph);  // v, r, nr, _vweight, _eweight, _degs, _g, ea.degree_dl_kind);
+//    if (ea.edges_dl)
+//    {
+//    size_t actual_B = 0;
+//    for (auto& ps : _partition_stats)
+//        actual_B += ps.get_actual_B();
+    dS_dl += get_delta_edges_dl(blockmodel, delta, 1, graph.num_edges());  // v, r, nr, _vweight, actual_B, _g);
+
+    return dS + BETA_DL * dS_dl;
+}
+
+double get_delta_deg_dl(const Blockmodel &blockmodel, const Delta &delta) {
+    if (!args.degreecorrected) return 0.0;
+
+    if (delta.current_block() == delta.proposed_block()) return 0.;  // for block_merge, it's this || size(block) == 0
+
+    long vkin = blockmodel.degrees_in(delta.current_block());  // graph.in_neighbors(vertex).size();
+    long vkout = blockmodel.degrees_out(delta.current_block());  // graph.out_neighbors(vertex).size();
+    long weight = blockmodel.block_size(delta.current_block());
+    double dS = 0;
+//    dS += get_delta_deg_dl_dist_change(blockmodel, delta.current_block(),  dop, -1);
+    dS += get_delta_deg_dl_dist_change(blockmodel, delta.current_block(),  vkin, vkout, weight, -1);
+//    dS += get_delta_deg_dl_dist_change(blockmodel, delta.proposed_block(), dop, +1);
+    dS += get_delta_deg_dl_dist_change(blockmodel, delta.proposed_block(), vkin, vkout, weight, +1);
+
+//    }
+    return dS;
+}
+
+double block_merge_delta_mdl(const Blockmodel &blockmodel, const utils::ProposalAndEdgeCounts &proposal,
+                             const Graph &graph, const Delta &delta) {
+//    get_move_entries(v, r, nr, m_entries, [](auto) constexpr { return false; });
+
+    if (delta.current_block() == delta.proposed_block()) return 0;
+
+    if (blockmodel.block_size(delta.current_block()) == 0 || blockmodel.block_size(delta.proposed_block()) == 0)
+        return 0;
+//    if (r == nr || _vweight[v] == 0)
+//        return 0;
+
+    double dS = 0;
+
+    dS = virtual_move_sparse(blockmodel, delta, blockmodel.block_size(delta.current_block()), proposal);  // <true>(v, r, nr, m_entries);
+
+    double dS_dl = 0;
+
+    dS_dl += get_delta_partition_dl(graph.num_vertices(), blockmodel, delta,
+                                    blockmodel.block_size(delta.current_block()));  // v, r, nr, ea);
+
+    dS_dl += get_delta_deg_dl(blockmodel, delta);  // v, r, nr, _vweight, _eweight, _degs, _g, ea.degree_dl_kind);
+
+    dS_dl += get_delta_edges_dl(blockmodel, delta, blockmodel.block_size(delta.current_block()), graph.num_edges());  // v, r, nr, _vweight, actual_B, _g);
+
+    return dS + BETA_DL * dS_dl;
+}
+
+}  // namespace nonparametric
 
 }  // namespace entropy

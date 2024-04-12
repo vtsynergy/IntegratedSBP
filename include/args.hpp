@@ -1,26 +1,9 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 /// A wrapper around tclap to make the use of command-line arguments bearable.
 #ifndef TCLAP_WRAPPER_ARGS
 #define TCLAP_WRAPPER_ARGS
 
 #include <iostream>
-#include <limits.h>
+#include <limits>
 #include <omp.h>
 #include <string>
 #include <unistd.h>
@@ -38,6 +21,7 @@ public:  // Everything in here is public, because why not?
     std::string blocksizevar;
     size_t cachesize;
     std::string csv;  // TODO: get rid of this - results now saved to json
+    bool degreecorrected;
     bool degreeproductsort;
     std::string delimiter;
     bool detach;
@@ -50,6 +34,7 @@ public:  // Everything in here is public, because why not?
     float mh_percent;
     bool modularity;
     bool nodelta;  // TODO: if delta is much faster, get rid of this and associated methods.
+    bool nonparametric;
     int numvertices;
     std::string output_file;
     std::string overlap;
@@ -93,6 +78,8 @@ public:  // Everything in here is public, because why not?
                                               "without the suffix, e.g.:\n"
                                               "if --csv=eval/test, results will be stored in eval/test.csv.",
                                               false, "./eval/test", "path", parser);
+            TCLAP::SwitchArg _degreecorrected("", "degreecorrected", "If set, will compute the degree-corrected description length.",
+                                              parser, false);
             TCLAP::SwitchArg _degreeproductsort("", "degreeproductsort", "If set, will use edge degree products to split vertices "
                                                 "into high and low influence sets.", parser, false);
             TCLAP::ValueArg<std::string> _delimiter("", "delimiter", "The delimiter used in the file storing the graph",
@@ -100,8 +87,16 @@ public:  // Everything in here is public, because why not?
             TCLAP::SwitchArg _detach("", "detach", "If set, will detach 1-degree vertices before running"
                                      "community detection.", parser, false);
             TCLAP::ValueArg<std::string> _distribute("", "distribute", "The distribution scheme to use. Default = "
-                                                     "none", false, "none", "none | none-edge-balanced | none-block-degree-balanced | none-agg-block-degree-balanced", parser);
-            TCLAP::ValueArg<std::string> _directory("d", "directory","The directory in which the graph is stored.",
+                                                     "none", false, "none", "none | 2hop-round-robin "
+                                                     "| 2hop-size-balanced | 2hop-snowball", parser);
+            TCLAP::ValueArg<std::string> _directory("d", "directory",
+                                "The directory in which the graph is stored. The following structure is assumed:\n"
+                                "filename for graph:"
+                                "<type>_<overlap>Overlap_<blocksizevar>BlockSizeVar_<numvertices>_nodes.tsv\n"
+                                "filename for truth:"
+                                "<type>_<overlap>Overlap_<blocksizevar>BlockSizeVar_<numvertices>_trueBlockmodel.tsv\n"
+                                "directory structure:"
+                                "<directory>/<type>/<overlap>Overlap_<blocksizevar>BlockSizeVar/<filename>\n",
                                                    false, "./data", "path", parser);
             TCLAP::SwitchArg _evaluate("", "evaluate", "If set, will evaluate the results before exiting",
                                        parser, false);
@@ -117,6 +112,8 @@ public:  // Everything in here is public, because why not?
                                          parser, false);
             TCLAP::SwitchArg _nodelta("", "nodelta", "If set, do not use the blockmodel deltas for "
                                       "entropy calculations.", parser, false);
+            TCLAP::SwitchArg _nonparametric("", "nonparametric", "If set, will use the nonparametric blockmodel entropy computations.",
+                                            parser, false);
             TCLAP::ValueArg<int> _numvertices("n", "numvertices", "The number of vertices in the graph", false, 1000,
                                               "int", parser);
             TCLAP::ValueArg<std::string> _output_file("", "output_file", "The filename of the json output. Will be stored in <json>/<output_file>",
@@ -151,6 +148,7 @@ public:  // Everything in here is public, because why not?
             this->blocksizevar = _blocksizevar.getValue();
             this->cachesize = _cachesize.getValue();
             this->csv = _csv.getValue();
+            this->degreecorrected = _degreecorrected.getValue();
             this->degreeproductsort = _degreeproductsort.getValue();
             this->delimiter = _delimiter.getValue();
             this->detach = _detach.getValue();
@@ -163,6 +161,7 @@ public:  // Everything in here is public, because why not?
             this->mh_percent = _mh_percent.getValue();
             this->modularity = _modularity.getValue();
             this->nodelta = _nodelta.getValue();
+            this->nonparametric = _nonparametric.getValue();
             this->numvertices = _numvertices.getValue();
             this->output_file = _output_file.getValue();
             if (this->output_file.empty()) {
@@ -180,6 +179,10 @@ public:  // Everything in here is public, because why not?
             this->transpose = _transpose.getValue();
             this->type = _type.getValue();
             this->undirected = _undirected.getValue();
+            if (this->nonparametric) {
+//                std::cout << "NOTE: using nonparametric entropy, setting greedy to false" << std::endl;
+                this->greedy = false;
+            }
         } catch (TCLAP::ArgException &exception) {
             std::cerr << "ERROR " << "ERROR: " << exception.error() << " for argument " << exception.argId() << std::endl;
             exit(-1);

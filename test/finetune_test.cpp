@@ -1,20 +1,3 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -149,11 +132,11 @@ TEST_F(FinetuneTest, BlockmodelDeltaGivesSameBlockmatrixAsEdgeCountUpdates) {
     EdgeWeights in_edges = finetune::edge_weights(graph.in_neighbors(), vertex);
     B.print_blockmatrix();
     Blockmodel B1 = B.copy();
-    B1.move_vertex(vertex, current_block, Proposal.proposal, Updates, new_block_degrees.block_degrees_out,
+    B1.move_vertex(V7, current_block, Proposal.proposal, Updates, new_block_degrees.block_degrees_out,
                   new_block_degrees.block_degrees_in, new_block_degrees.block_degrees);
     B1.print_blockmatrix();
     Blockmodel B2 = B.copy();
-    B2.move_vertex(vertex, Proposal.proposal, Deltas, new_block_degrees.block_degrees_out,
+    B2.move_vertex(V7, Proposal.proposal, Deltas, new_block_degrees.block_degrees_out,
                    new_block_degrees.block_degrees_in, new_block_degrees.block_degrees);
     B2.print_blockmatrix();
     for (long row = 0; row < B.getNum_blocks(); ++row) {

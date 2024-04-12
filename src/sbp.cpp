@@ -1,20 +1,3 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 #include "sbp.hpp"
 
 #include "block_merge.hpp"
@@ -51,7 +34,7 @@ std::vector<intermediate> get_intermediates() {
 }*/
 
 void add_intermediate(double iteration, const Graph &graph, double modularity, double mdl) {
-    double normalized_mdl_v1 = entropy::normalize_mdl_v1(mdl, graph.num_edges());
+    double normalized_mdl_v1 = entropy::normalize_mdl_v1(mdl, graph);
 //    double modularity = -1;
 //    if (iteration == -1)
 //        modularity = graph.modularity(blockmodel.block_assignment());
@@ -92,7 +75,7 @@ Blockmodel stochastic_block_partition(Graph &graph, Args &args, bool divide_and_
     common::candidates = std::uniform_int_distribution<long>(0, blockmodel.getNum_blocks() - 2);
 //    Blockmodel_first_build_time = BLOCKMODEL_BUILD_TIME;
     BLOCKMODEL_BUILD_TIME = 0.0;
-    double initial_mdl = entropy::mdl(blockmodel, graph.num_vertices(), graph.num_edges());
+    double initial_mdl = entropy::mdl(blockmodel, graph);
     add_intermediate(0, graph, -1, initial_mdl);
     BlockmodelTriplet blockmodel_triplet = BlockmodelTriplet();
     double iteration = 0;
@@ -113,7 +96,7 @@ Blockmodel stochastic_block_partition(Graph &graph, Args &args, bool divide_and_
         blockmodel = block_merge::merge_blocks(blockmodel, graph, graph.num_edges());
         block_merge::BlockMerge_time += MPI_Wtime() - start_bm;
         if (iteration < 1) {
-            double mdl = entropy::mdl(blockmodel, graph.num_vertices(), graph.num_edges());
+            double mdl = entropy::mdl(blockmodel, graph);
             add_intermediate(0.5, graph, -1, mdl);
         }
         std::cout << "Starting MCMC vertex moves" << std::endl;

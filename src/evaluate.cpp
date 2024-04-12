@@ -1,20 +1,3 @@
-/// ====================================================================================================================
-/// Part of the accelerated Stochastic Block Partitioning (SBP) project.
-/// Copyright (C) Virginia Polytechnic Institute and State University, 2023. All Rights Reserved.
-///
-/// This software is provided as-is. Neither the authors, Virginia Tech nor Virginia Tech Intellectual Properties, Inc.
-/// assert, warrant, or guarantee that the software is fit for any purpose whatsoever, nor do they collectively or
-/// individually accept any responsibility or liability for any action or activity that results from the use of this
-/// software.  The entire risk as to the quality and performance of the software rests with the user, and no remedies
-/// shall be provided by the authors, Virginia Tech or Virginia Tech Intellectual Properties, Inc.
-/// This library is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied
-/// warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser General Public License for more
-/// details.
-/// You should have received a copy of the GNU Lesser General Public License along with this library; if not, write to
-/// the Free Software Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301 USA.
-///
-/// Author: Frank Wanye
-/// ====================================================================================================================
 #include "evaluate.hpp"
 
 #include "entropy.hpp"
@@ -119,7 +102,7 @@ Eval evaluate_blockmodel(const Graph &graph, Blockmodel &blockmodel) {
     std::vector<long> true_assignment(graph.assignment());
     long true_num_blocks = 1 + *std::max_element(true_assignment.begin(), true_assignment.end());
     Blockmodel true_blockmodel(true_num_blocks, graph, 0.5, true_assignment);
-    double true_entropy = entropy::mdl(true_blockmodel, graph.num_vertices(), graph.num_edges());
+    double true_entropy = entropy::mdl(true_blockmodel, graph);  // .num_vertices(), graph.num_edges());
     std::cout << "true entropy = " << true_entropy << std::endl;
     return Eval { f1_score, nmi, true_entropy };
 }
