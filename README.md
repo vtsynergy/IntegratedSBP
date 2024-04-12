@@ -34,7 +34,7 @@ Tests can be run with `make test`, however some of the test build options (in pa
 Typical usage of the integrated approach:
 ```
 mpiexec -n <num_cluster_nodes> ./SBP --filepath <path> -a hybrid_mcmc --threads <num_threads> \
---batches <num_batches> --distribute none-edge-balanced --approximate --greedy -m 0.075 \
+--batches <num_batches> --distribute none-edge-balanced --nonparametric -m 0.075 \
 --degreeproductsort --samplingalg expansion_snowball --samplesize 0.5
 ```
 
@@ -48,13 +48,17 @@ just save the final community detection results, as well as most of the paramete
 the executable, to a json file for later evaluation. The `--tag="some identifier"` option 
 can be useful for quickly differentiating between runs.
 
+We recommend running with the new `--nonparametric` option to improve runtime. For best
+results, do not use the `--greedy` and `--approximate` options together with this.
+
 The `--greedy` option is a misnomer: excluding it will make the algorithm use a "greedy" 
 MCMC technique that does not compute the Hastings Correction. This option should speed up 
 the algorithm, but in our testing has often led to a decrease in accuracy, so we do not 
 recommend doing so.
 
-Excluding the `--approximate` option will run a more involved block merge phase for SBP, but
-in our experiments the accuracy gains have been minimal at best.
+The `--approximate` option will run a less involved involved block merge phase for SBP, 
+which may speed up the code at the cost of runtime. When using the `--nonparametric`
+option, we recommend omitting this parameter.
 
 By specifying `-a async_gibbs`, SBP will run in a fully asynchronous manner, using 
 asynchronous Gibbs instead of Hybrid SBP or the Metropolis Hastings algorithm. This will
@@ -65,6 +69,12 @@ executable without MPI).
 
 `--distribute` options other than `none-edge-balanced` are not fully tested with the current
 code.
+
+WARNING: the `--degreecorrected` option is not fully implemented. If you use this option,
+you will almost definitely get bad results.
+
+Use a combination of `--json` (for the directory) and `--output_file` to control where the
+resulting partitions are stored.
 
 Running `./SBP --help` will provide a description of all available command-line options.
 
@@ -83,10 +93,8 @@ If you use this code, please cite our HPEC paper:
   month={9},
   pages={1-7},
   address={Waltham, MA},
-  doi={pending official publication to IEEE Xplore}}
+  doi={10.1109/HPEC58863.2023.10363599}}
 ```
-
-Note: doi will be made available once the paper is officially published on IEEE Xplore.
 
 # License
 
